@@ -223,6 +223,7 @@ class Autoencoder(Model):
 				encoded_data_pure = x
 				
 				rand_data = ge.uniform(tf.shape(x), minval=0., maxval=100.0)
+				rander = rander + [False] * (len(x[0,:]) - len(rander))
 				x = tf.stack([rand_data[:,i] if dorand else x[:,i] for i, dorand in enumerate(rander)], axis=1)
 				##x = tf.math.mod(x, 100.)
 				encoded_data = x
