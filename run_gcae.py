@@ -106,7 +106,7 @@ class Autoencoder(Model):
 			layer_module = getattr(eval(layer_def["module"]), layer_def["class"])
 			layer_args = layer_def["args"]
 
-			for arg in ["size", "layers", "units", "shape", "target_shape", "output_shape", "kernel_size", "strides"]:
+			for arg in ["n", "size", "layers", "units", "shape", "target_shape", "output_shape", "kernel_size", "strides"]:
 
 				if arg in layer_args.keys():
 					layer_args[arg] = eval(str(layer_args[arg]))
@@ -393,7 +393,8 @@ def run_optimization(model, model2, optimizer, optimizer2, loss_function, input,
 	val = ge.uniform((), minval=0, maxval=1.0)
 	#full_loss = val < 0.5
 	full_loss = True
-	do_two = True
+	do_two = False
+	do_softmaxed = False
 	with tf.GradientTape() as g:
 		output, encoded_data = model(input, targets, is_training=True, regloss=False)
 		if pure and phenomodel is not None:
@@ -418,11 +419,14 @@ def run_optimization(model, model2, optimizer, optimizer2, loss_function, input,
 
 	with tf.GradientTape() as g5:
 		loss_value = tf.constant(0.)
-		for output, encoded_data in (model(input, targets, is_training=True, regloss=False),) + ((model2(input, targets, is_training=True, regloss=False), ) if do_two else ()):
-			y_true = tf.one_hot(tf.cast(targets * 2, tf.uint8), 3)
-			y_pred = tf.nn.softmax(output[:,0:model.n_markers])
-			#0*tf.math.reduce_mean(y_pred,axis=0,keepdims=True)
-			loss_value += tf.math.reduce_sum(((-y_pred) * y_true)) * 1e-6
+		if do_softmaxed:
+			for output, encoded_data in (model(input, targets, is_training=True, regloss=False),) + ((model2(input, targets, is_training=True, regloss=False), ) if do_two else ()):
+				y_true = tf.one_hot(tf.cast(targets * 2, tf.uint8), 3)
+				y_pred = tf.nn.softmax(output[:,0:model.n_markers])
+				#0*tf.math.reduce_mean(y_pred,axis=0,keepdims=True)
+				loss_value += tf.math.reduce_sum(((-y_pred) * y_true)) * 1e-6
+		for val in allvars:
+			loss_value += tf.square(tf.math.maximum(1.0, tf.math.reduce_max(tf.math.abs(val))))
 		#if pure or full_loss:
 		#	loss_value = -loss_function(y_pred = output, y_true = targets, avg=True)
 			
@@ -552,6 +556,7 @@ def run_optimization(model, model2, optimizer, optimizer2, loss_function, input,
 				gradients3.append(g1)
 			else:
 				gradients3.append(g1 * (1-cappedalpha) + g2 * (cappedalpha))
+				tf.print("MAX", tf.math.reduce_max(tf.abs(gradients3[-1])))
 		return (gradients3, alpha)
 
 	#gradients4, alpha4 = combine(gradientsrandx, gradientsrandy)
@@ -901,12 +906,13 @@ def main():
 				y_pred *= pow
 				y_pred = y_pred - tf.stop_gradient(tf.math.reduce_max(y_pred, axis=-1, keepdims=True))
 				y_pred_prob = tf.nn.softmax(y_pred)
-				gamma = 4
-				partialres = (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true * (1 - tf.math.reduce_sum(tf.stop_gradient(y_pred_prob) * y_true, axis=-1, keepdims=True)/tf.math.reduce_sum(y_true * y_true, axis=-1, keepdims=True))**gamma, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
+				gamma = 1
+				#partialres = (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true * (1 - tf.math.reduce_sum(tf.stop_gradient(y_pred_prob) * y_true, axis=-1, keepdims=True)/tf.math.reduce_sum(y_true * y_true, axis=-1, keepdims=True))**gamma, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
+				partialres = tf.math.abs(-0.5 - (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true * (1 - tf.math.reduce_sum(tf.stop_gradient(y_pred_prob) * y_true, axis=-1, keepdims=True)/tf.math.reduce_sum(y_true * y_true, axis=-1, keepdims=True))**gamma, axis = 0) * tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)-1))) + 0.5
 				##partialres = (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
 
 				##return -tf.math.reduce_mean(tf.boolean_mask(partialres, ge.uniform(tf.shape(partialres)) < 0.9))
-				return -tf.math.reduce_mean(partialres)
+				return tf.math.reduce_mean(partialres)
 				#return 0.5 * loss_obj(y_pred = y_pred, y_true = y_true) + 0.5 * loss_obj(y_pred = tf.math.reduce_mean(y_pred, axis = 0, keepdims = True), y_true = tf.math.reduce_mean(y_true, axis = 0, keepdims = True))
 
 
@@ -1238,6 +1244,8 @@ def main():
 			# as well as any stateful metric variables
 			# run_optimization(autoencoder, optimizer, loss_func, input, targets)
 			autoencoder.load_weights(weights_file_prefix)
+			for vars in autoencoder.trainable_variables:
+				tf.print("MAX", tf.math.reduce_max(tf.abs(vars)))
 			if pheno_model is not None:
 				pheno_weights_file_prefix = "{0}/{1}/{2}".format(train_directory, "pheno_weights", epoch)
 				pheno_model.load_weights(pheno_weights_file_prefix)
@@ -1268,7 +1276,7 @@ def main():
 					if not missing_mask_input:
 						input_train_batch = input_train_batch[:,:,0, np.newaxis]
 
-					decoded_train_batch, encoded_train_batch = autoencoder(input_train_batch, is_training = False)
+					decoded_train_batch, encoded_train_batch = autoencoder(input_train_batch, is_training = True)
 					if pheno_model is not None:
 						add = pheno_model(encoded_train_batch)[0][:,0]
 						print(add)
