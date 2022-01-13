@@ -199,6 +199,10 @@ class ResidualBlock4(tf.keras.layers.Layer):
         layers.append(tf.keras.layers.LeakyReLU())
         print("--- conv1d  filters: {0} kernel_size: {1}".format(filters, kernel_size))
 
+        self.l0 = layers[0]
+        self.l1 = layers[1]
+        self.l2 = layers[2]
+        self.l3 = layers[3]
         self.layers = layers
 
 
@@ -270,6 +274,8 @@ class BiasWeightLayerPrime(Layer):
 
     def call(self, x):
         #self.add_loss(tf.math.reduce_sum(1e-5 - tf.math.minimum(tf.square(self.kernel), 1e-5)))
+        tf.print("KERNEL", self.kernel[0:1])
+        tf.print("BIAS", self.bias[0])
         return x * self.createweight(x, self.kernel) + self.createweight(x, self.bias)
 
     def compute_output_shape(self, input_shape):
@@ -285,17 +291,19 @@ class BiasWeightLayer(Layer):
         shape=(1,) + input_shape[1:]
         self.kernel = self.add_weight(name='kernel', 
                                       shape=shape,
-                                      initializer='uniform',
+                                      initializer='zeros',
                                       trainable=True)
         self.bias = self.add_weight(name='bias', 
                                       shape=shape,
-                                      initializer='uniform',
+                                      initializer='zeros',
                                       trainable=True)
         super(BiasWeightLayer, self).build(input_shape)  # Be sure to call this at the end
 
     def call(self, x):
         self.add_loss(tf.math.reduce_sum(1e-5 - tf.math.minimum(tf.square(self.kernel), 1e-5)))
-        return x * self.kernel + self.bias
+        #tf.print("KERBWL", self.kernel)
+        #tf.print("BBWL", self.bias)
+        return x * self.kernel + x + self.bias
 
     def compute_output_shape(self, input_shape):
         return input_shape

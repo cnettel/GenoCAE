@@ -19,6 +19,10 @@ from sklearn.metrics import f1_score
 from scipy import stats
 from pandas_plink import read_plink
 import csv
+from sklearn.neighbors import NearestCentroid
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.naive_bayes import GaussianNB
 
 @numba.jit(nopython=True, parallel=True)
 def helper_get_train_batch(sparsify, n_samples_batch, genotypes_train, genotypes_train_orig, mask_train, indices_this_batch, missing_val):
@@ -44,7 +48,7 @@ class data_generator_ae:
 	def __init__(self,
 				 filebase,
 				 normalization_mode = "smartPCAstyle",
-				 normalization_options= {"flip":False, "missing_val":0.0},
+				 normalization_options= {"flip":False, "missing_val":0.0, "num_markers": 100},
 				 get_genotype_data=True,
 				 impute_missing = True):
 		'''
@@ -67,7 +71,7 @@ class data_generator_ae:
 		self._define_samples()
 
 		if get_genotype_data:
-			self._normalize()
+			self._normalize(normalization_options["num_markers"])
 
 	def _impute_missing(self, genotypes):
 		'''
@@ -110,7 +114,7 @@ class data_generator_ae:
 		'''
 		mask[np.random.random_sample(mask.shape) > keep_fraction] = 0
 
-	def _normalize(self):
+	def _normalize(self, num_markers):
 		'''
 		Normalize the genotype data.
 
@@ -121,6 +125,7 @@ class data_generator_ae:
 
 		try:
 			genotypes = np.genfromtxt(self.filebase + ".eigenstratgeno", delimiter = np.repeat(1, n_samples))
+			genotypes = genotypes[0:num_markers,:]
 			self.n_markers = len(genotypes)
 		except:
 			(genotypes, self.n_markers) = genfromplink(self.filebase)
@@ -133,11 +138,13 @@ class data_generator_ae:
 		genotypes_train = genotypes[:, self.sample_idx_all]
 
 		normalization_method = getattr(normalization, "normalize_genos_"+self.normalization_mode)
+		no2 = dict(self.normalization_options)
+		del no2["num_markers"]
 
 
 		genotypes_train_normed, _, scaler = normalization_method(genotypes_train, np.array([]),
 																					 get_scaler = True,
-																					 **self.normalization_options)
+																					 **no2)
 		self.scaler = scaler
 
 		self.genotypes_train_orig = np.array(genotypes_train_normed, dtype = np.dtype('f4'), order='C')
@@ -481,8 +488,20 @@ def get_pops_with_k(k, coords_by_pop):
 
 
 def f1_score_kNN(x, labels, labels_to_use, k = 5):
-	classifier = KNeighborsClassifier(n_neighbors=k)
-	classifier.fit(x, labels)
+	if k > 0:
+		classifier = KNeighborsClassifier(n_neighbors=k)
+	elif k == 0:
+		classifier = NearestCentroid()
+	elif k == -1:
+		classifier = QuadraticDiscriminantAnalysis()
+	elif k == -2:
+		classifier = GaussianNB()
+	elif k == -3:
+		classifier = LinearDiscriminantAnalysis()
+	if k > 0: 
+		classifier.fit(x, labels)		
+	else: #Never used
+		classifier.fit(np.concatenate((x,x + (np.random.random_sample(x.shape)-0.5)*1e-4)), np.concatenate((labels, labels)))
 	predicted_labels = classifier.predict(x)
 	# this returns a vector of f1 scores per population
 	f1_score_per_pop = f1_score(y_true=labels, y_pred=predicted_labels, labels = labels_to_use, average = None)

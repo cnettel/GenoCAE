@@ -48,6 +48,9 @@ import matplotlib.animation as animation
 import asyncio
 from pathlib import Path
 
+gpus = tf.config.experimental.list_physical_devices('GPU')
+tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=28000)])
+
 #mirrored_strategy = tf.distribute.MirroredStrategy()
 #tf.debugging.enable_check_numerics()
 ge = tf.random.Generator.from_seed(1)
@@ -56,6 +59,9 @@ tf.config.experimental.enable_tensor_float_32_execution(
     False
 )
 
+
+
+passthrough = tf.Variable(1, dtype=tf.int32)
 
 GCAE_DIR = Path(__file__).resolve().parent
 class Autoencoder(Model):
@@ -86,6 +92,19 @@ class Autoencoder(Model):
 		first_layer_def = model_architecture["layers"][0]
 		layer_module = getattr(eval(first_layer_def["module"]), first_layer_def["class"])
 		layer_args = first_layer_def["args"]
+		for arg in ["n", "size", "layers", "units", "shape", "target_shape", "output_shape", "kernel_size", "strides"]:
+
+				if arg in layer_args.keys():
+					layer_args[arg] = eval(str(layer_args[arg]))
+
+		if "kernel_initializer" in layer_args and layer_args["kernel_initializer"] == "flum":
+			if "kernel_size" in layer_args:
+				dim = layer_args["kernel_size"] * layer_args["filters"]
+			else:
+				dim = layer_args["units"]
+			limit = math.sqrt(2 * 3 / (dim))
+			layer_args["kernel_initializer"] = tf.keras.initializers.RandomUniform(-limit, limit)			
+
 		try:
 			activation = getattr(tf.nn, layer_args["activation"])
 			layer_args.pop("activation")
@@ -100,6 +119,7 @@ class Autoencoder(Model):
 
 		if first_layer_def["class"] == "conv1d" and "strides" in layer_args.keys() and layer_args["strides"] > 1:
 			ns.append(int(first_layer.shape[1]))
+			raise NotImplementedError
 
 		# add all layers except first
 		for layer_def in model_architecture["layers"][1:]:
@@ -110,6 +130,14 @@ class Autoencoder(Model):
 
 				if arg in layer_args.keys():
 					layer_args[arg] = eval(str(layer_args[arg]))
+
+			if "kernel_initializer" in layer_args and layer_args["kernel_initializer"] == "flum":
+				if "kernel_size" in layer_args:
+					dim = layer_args["kernel_size"] * layer_args["filters"]
+				else:
+					dim = layer_args["units"]
+				limit = math.sqrt(2 * 3 / (dim))
+				layer_args["kernel_initializer"] = tf.keras.initializers.RandomUniform(-limit, limit)
 
 			if layer_def["class"] == "MaxPool1D":
 				ns.append(int(math.ceil(float(ns[-1]) / layer_args["strides"])))
@@ -143,8 +171,7 @@ class Autoencoder(Model):
 			self.nms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=tf.float32))#, name="nmarker_spec_var")
 		else:
 			print("No marker specific variable.")
-
-
+	
 	def call(self, input_data, targets=None, is_training = True, verbose = False, rander=[False, False], regloss=True):
 		'''
 		The forward pass of the model. Given inputs, calculate the output of the model.
@@ -239,6 +266,7 @@ class Autoencoder(Model):
 				if "basis" in layer_name:
 					basis = tf.expand_dims(tf.range(-200., 200., 20.), axis=0)
 					x = tf.clip_by_value(tf.concat([tf.expand_dims(x[:,i], axis=1) - basis for i in range(2)], axis=1), -40., 40.)
+				x = tf.where(passthrough == 1, x, tf.stop_gradient(x))
 
 
 
@@ -426,7 +454,10 @@ def run_optimization(model, model2, optimizer, optimizer2, loss_function, input,
 				#0*tf.math.reduce_mean(y_pred,axis=0,keepdims=True)
 				loss_value += tf.math.reduce_sum(((-y_pred) * y_true)) * 1e-6
 		for val in allvars:
-			loss_value += tf.square(tf.math.maximum(1.0, tf.math.reduce_max(tf.math.abs(val))))
+			maxflax = tf.math.reduce_max(tf.math.abs(val))
+			maxflax2 = tf.math.minimum(tf.math.reduce_max(tf.math.abs(val)), tf.math.reduce_max(tf.math.abs(1. - tf.math.abs(val))))
+			tf.print("MAX", maxflax)
+			loss_value += tf.square(tf.math.maximum(1.0, maxflax2))
 		#if pure or full_loss:
 		#	loss_value = -loss_function(y_pred = output, y_true = targets, avg=True)
 			
@@ -556,7 +587,6 @@ def run_optimization(model, model2, optimizer, optimizer2, loss_function, input,
 				gradients3.append(g1)
 			else:
 				gradients3.append(g1 * (1-cappedalpha) + g2 * (cappedalpha))
-				tf.print("MAX", tf.math.reduce_max(tf.abs(gradients3[-1])))
 		return (gradients3, alpha)
 
 	#gradients4, alpha4 = combine(gradientsrandx, gradientsrandy)
@@ -619,7 +649,7 @@ def alfreqvector(y_pred):
 		return tf.concat(((1-alfreq) ** 2, 2 * alfreq * (1 - alfreq), alfreq ** 2), axis=-1)
 		#return tf.concat(((1-alfreq), alfreq), axis=-1)
 	else:
-		return y_pred#tf.nn.softmax(y_pred)
+		return y_pred[:,:,0:3]#tf.nn.softmax(y_pred)
 
 def generatepheno(data, poplist):
 	if data is None:
@@ -648,6 +678,34 @@ def save_weights(train_directory, prefix, model):
 		print("... renamed " + train_directory + " to  " + newname)
 
 	model.save_weights(prefix, save_format ="tf")
+
+@tf.function
+def project_batch(autoencoder, loss_func, input_train_batch, targets_train_batch, pheno_model):
+	decoded_train_batch, encoded_train_batch = autoencoder(input_train_batch, is_training = True)
+	if pheno_model is not None:
+		add = pheno_model(encoded_train_batch)[0][:,0]
+		print(add)
+		print(np.shape(add))
+		if pheno_train is not None:
+			pheno_train = np.concatenate((pheno_train, add), axis=0)
+		else:
+			pheno_train = add
+		
+	loss_train_batch = loss_func(y_pred = decoded_train_batch, y_true = targets_train_batch)
+	#loss_train_batch += sum(autoencoder.losses)
+	return decoded_train_batch, encoded_train_batch, loss_train_batch
+
+@tf.function
+def valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch):
+	output_valid_batch, encoded_data_valid_batch = autoencoder(input_valid_batch, is_training = True, regloss=False)					 
+
+	valid_loss_batch = loss_func(y_pred = output_valid_batch, y_true = targets_valid_batch)
+	#valid_loss_batch += sum(autoencoder.losses)
+	return valid_loss_batch
+
+@tf.function
+def init_model(autoencoder, input_test):
+	return autoencoder(input_test[0:2], is_training = False, verbose = True)
 
 def main():
 	asyncio.new_event_loop()
@@ -899,7 +957,7 @@ def main():
 				#tf.print("PRED", y_pred[orig_nonmissing_mask,:])
 				#tf.print("TRUE", y_true[orig_nonmissing_mask,:])
 				#return -tf.math.reduce_mean(tf.math.reduce_sum(tf.math.log(y_pred+1e-30) * y_true, axis = 0) / ((tf.math.reduce_sum(y_true2, axis=0))))
-				beta = 0.9
+				beta = 0.999
 				                                                    
 				###return -tf.math.reduce_mean(tf.math.reduce_sum(tf.math.log(y_pred+1e-30) * y_true, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
 				#return -tf.math.reduce_mean(tf.math.reduce_sum(      (tf.clip_by_value(y_pred,-10,10)-tf.math.reduce_max(y_pred, axis=-1, keepdims=True)) * y_true, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
@@ -908,7 +966,7 @@ def main():
 				y_pred_prob = tf.nn.softmax(y_pred)
 				gamma = 1
 				#partialres = (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true * (1 - tf.math.reduce_sum(tf.stop_gradient(y_pred_prob) * y_true, axis=-1, keepdims=True)/tf.math.reduce_sum(y_true * y_true, axis=-1, keepdims=True))**gamma, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
-				partialres = tf.math.abs(-0.5 - (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true * (1 - tf.math.reduce_sum(tf.stop_gradient(y_pred_prob) * y_true, axis=-1, keepdims=True)/tf.math.reduce_sum(y_true * y_true, axis=-1, keepdims=True))**gamma, axis = 0) * tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)-1))) + 0.5
+				partialres = - (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true * (1 - tf.math.reduce_sum(tf.stop_gradient(y_pred_prob) * y_true, axis=-1, keepdims=True)/tf.math.reduce_sum(y_true * y_true, axis=-1, keepdims=True))**gamma, axis = 0) * tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)-1))
 				##partialres = (tf.math.reduce_sum(      (y_pred-tf.math.log(tf.math.reduce_sum(tf.math.exp(y_pred), axis=-1, keepdims=True))) * y_true, axis = 0) * (1.0 - beta) / (1-tf.math.pow(beta, tf.math.reduce_sum(y_true2, axis=0)+1)+1e-9))
 
 				##return -tf.math.reduce_mean(tf.boolean_mask(partialres, ge.uniform(tf.shape(partialres)) < 0.9))
@@ -949,6 +1007,9 @@ def main():
 		# if we do not have missing mask input, remeove that dimension/channel from the input that data generator returns
 		if not missing_mask_input:
 			input_valid = input_valid[:,:,0, np.newaxis]
+
+		input_valid = tf.convert_to_tensor(input_valid)
+		targets_valid = tf.convert_to_tensor(targets_valid)
 
 		n_unique_train_samples = copy.deepcopy(dg.n_train_samples)
 		n_valid_samples = copy.deepcopy(dg.n_valid_samples)
@@ -1037,7 +1098,8 @@ def main():
 		input_test, targets_test, _  = dg.get_train_set(0.0)
 		if not missing_mask_input:
 			input_test = input_test[:,:,0, np.newaxis]
-		output_test, encoded_data_test = autoencoder(input_test[0:2], is_training = False, verbose = True)
+
+		output_test, encoded_data_test = init_model(autoencoder, input_test)
 
 		######### Create objects for tensorboard summary ###############################
 
@@ -1059,6 +1121,10 @@ def main():
 			effective_epoch = e + resume_from
 			losses_t_batches = []
 			losses_v_batches = []
+			if e % 100 < 50:
+				passthrough.assign(0)
+			else:
+				passthrough.assign(1)
 
 			for ii in range(n_train_batches):
 				step_counter += 1
@@ -1119,7 +1185,7 @@ def main():
 			pheno_weights_file_prefix = train_directory + "/pheno_weights/" + str(effective_epoch)
 
 
-			if n_valid_samples > 0:
+			if n_valid_samples > 0 and e % 100 == 0:
 
 				startTime = datetime.now()
 
@@ -1131,12 +1197,8 @@ def main():
 					else:
 						input_valid_batch = input_valid[start:start+batch_size_valid]
 						targets_valid_batch = targets_valid[start:start+batch_size_valid]
-
-					output_valid_batch, encoded_data_valid_batch = autoencoder(input_valid_batch, is_training = False)
-
-					valid_loss_batch = loss_func(y_pred = output_valid_batch, y_true = targets_valid_batch)
-					valid_loss_batch += sum(autoencoder.losses)
-					losses_v_batches.append(valid_loss_batch)
+					
+					losses_v_batches.append(valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch).numpy())
 
 				valid_loss_this_epoch = np.average(losses_v_batches)
 				with valid_writer.as_default():
@@ -1221,8 +1283,8 @@ def main():
 		else:
 			pheno_model = None
 
-		optimizer = tf.optimizers.Adam(learning_rate = learning_rate)
-		optimizer2 = tf.optimizers.Adam(learning_rate = learning_rate)
+		optimizer = tf.optimizers.Adam(learning_rate = learning_rate)#, clipvalue=1.0)
+		optimizer2 = tf.optimizers.Adam(learning_rate = learning_rate)#, clipvalue=1.0)
 
 		genotype_concordance_metric = GenotypeConcordance()
 
@@ -1244,8 +1306,6 @@ def main():
 			# as well as any stateful metric variables
 			# run_optimization(autoencoder, optimizer, loss_func, input, targets)
 			autoencoder.load_weights(weights_file_prefix)
-			for vars in autoencoder.trainable_variables:
-				tf.print("MAX", tf.math.reduce_max(tf.abs(vars)))
 			if pheno_model is not None:
 				pheno_weights_file_prefix = "{0}/{1}/{2}".format(train_directory, "pheno_weights", epoch)
 				pheno_model.load_weights(pheno_weights_file_prefix)
@@ -1276,18 +1336,8 @@ def main():
 					if not missing_mask_input:
 						input_train_batch = input_train_batch[:,:,0, np.newaxis]
 
-					decoded_train_batch, encoded_train_batch = autoencoder(input_train_batch, is_training = True)
-					if pheno_model is not None:
-						add = pheno_model(encoded_train_batch)[0][:,0]
-						print(add)
-						print(np.shape(add))
-						if pheno_train is not None:
-							pheno_train = np.concatenate((pheno_train, add), axis=0)
-						else:
-							pheno_train = add
-						
-					loss_train_batch = loss_func(y_pred = decoded_train_batch, y_true = targets_train_batch)
-					#loss_train_batch += sum(autoencoder.losses)
+
+					decoded_train_batch, encoded_train_batch, loss_train_batch = project_batch(autoencoder, loss_func, input_train_batch, targets_train_batch, pheno_model)
 
 					ind_pop_list_train = np.concatenate((ind_pop_list_train, ind_pop_list_train_batch), axis=0)
 					encoded_train = np.concatenate((encoded_train, encoded_train_batch), axis=0)

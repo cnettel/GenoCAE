@@ -20,7 +20,9 @@ pip3 install docopt grpcio numpy scikit-learn matplotlib\>=3.2.1 seaborn scipy==
 #mv ${SLURM_JOB_NAME}.py ./model_scripts
 #python3 -u ./model_scripts/${SLURM_JOB_NAME}.py train \
 #python3 -u ${SLURM_JOB_NAME}.py train \
-TF_XLA_FLAGS=--tf_xla_auto_jit=fusible python3 -u run_gcae.py train \
+###TF_XLA_FLAGS=--tf_xla_auto_jit=fusible
+###--tf_xla_async_compilation=true
+TF_CPP_VMODULE=mark_for_compilation_pass=2 TF_XLA_FLAGS="--tf_xla_auto_jit=1 --tf_xla_max_cluster_size=100" python3 -u run_gcae.py train \
 --datadir $datadir \
 --data $data \
 --model_id $model \
@@ -28,8 +30,8 @@ TF_XLA_FLAGS=--tf_xla_auto_jit=fusible python3 -u run_gcae.py train \
 --data_opts_id $data_opts \
 --save_interval $save_interval \
 --epochs $epochs \
---trainedmodeldir $trainedmodeldir \
---pheno_model_id p1
+--trainedmodeldir $trainedmodeldir #\
+#--pheno_model_id p1
 #--recombination $recombination
 
 #python3 -u ./model_scripts/${SLURM_JOB_NAME}.py project \

@@ -15,7 +15,7 @@ logdir=./logs/
 model_id=${model_id:M3e}
 #train_opts_id=ex3
 train_opts_id=CCE${NUM:-137}_L04_R10_N02_B05_E13
-data_opts_id=d_0_4
+data_opts_id=d_0_4${DATA_SUFFIX}
 ## Original code
 #model_id=Ea_1_i3sg_nms_sm_vae_4_ups10
 #train_opts_id=ce_x2_a_y_6ex413_3_small
@@ -27,7 +27,7 @@ data_opts_id=d_0_4
 ##############################
 ## From the tiny example on Git
 epochs=40000
-save_interval=100
+save_interval=1000
 recombination=1
 ## Original code
 #epochs=20000
@@ -40,8 +40,8 @@ recombination=1
 #datadir=example_tiny/
 #data=HumanOrigins249_tiny
 datadir=data_all/
-#data=HumanOrigins2067_filtered
-data=issue_2_bin
+data=HumanOrigins2067_filtered
+#data=issue_2_bin
 if [ -z "$test_id" ]
 	then
 		test_id=145
@@ -71,7 +71,7 @@ then
 	cores=8
 	taskname=train.$model_id.$train_opts_id.$data_opts_id.${test_id}.$data
 	echo Launching $taskname $datadir $data $model_id $train_opts_id $data_opts_id $epochs $save_interval $test_id $outdir
-	sbatch --open-mode=append --gres=gpu:T4:1 -t $time -e ${logdir}${taskname}.error -o ${logdir}${taskname}.output -J $taskname train_ae_alvis.sh $datadir $data $model_id $train_opts_id $data_opts_id $epochs $save_interval $test_id $outdir 
+	sbatch --open-mode=append --gres=gpu:V100:1 -t $time -e ${logdir}${taskname}.error -o ${logdir}${taskname}.output -J $taskname train_ae_alvis.sh $datadir $data $model_id $train_opts_id $data_opts_id $epochs $save_interval $test_id $outdir 
 	
 	#$recombination
 
@@ -129,10 +129,10 @@ if [ $operation == "project" ]
 then
 	project=snic2020-15-43
 	cores=4
-		time="1:59:00"
+		time="5:59:00"
 		taskname=project.$model_id.$train_opts_id.$data_opts_id.$data
 		echo Launching $taskname
-		sbatch --gres=gpu:T4:1 -t $time -e ${logdir}${taskname}.error -o ${logdir}${taskname}.output -J $taskname project_ae_alvis.sh $datadir $data $model_id $train_opts_id $data_opts_id $epochs $save_interval $test_id $outdir
+		sbatch --gres=gpu:V100:1 -t $time -e ${logdir}${taskname}.error -o ${logdir}${taskname}.output -J $taskname project_ae_alvis.sh $datadir $data $model_id $train_opts_id $data_opts_id $epochs $save_interval $test_id $outdir
 fi
 
 if [ $operation == "projectnow" ]
