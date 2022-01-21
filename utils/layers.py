@@ -308,6 +308,47 @@ class BiasWeightLayer(Layer):
     def compute_output_shape(self, input_shape):
         return input_shape
 
+class LocallyConnected(Layer):
+
+    def __init__(self, filters, kernel_size, kernel_initializer='glorot_uniform', strides=1, implementation=0, **kwargs):
+        super(LocallyConnected, self).__init__(**kwargs)
+        self.filters = filters
+        self.kernel_size = kernel_size
+        self.kernel_initializer = kernel_initializer
+        #TODO ERROR IF NON-1 STRIDE
+
+    def build(self, input_shape, ):
+        # Create a trainable weight variable for this layer.
+        biasshape=(1,) + input_shape[1:len(input_shape) - 1] + [self.filters]
+        kernelshape=(1,) + input_shape[1:len(input_shape) - 1] + [input_shape[-1], self.filters]
+        self.kernels = []
+        for i in range(self.kernel_size):
+            kernel = self.add_weight(name=f'kernel{i}', 
+                                      shape=kernelshape,
+                                      initializer=self.kernel_initializer,
+                                      trainable=True)
+            self.kernels.append(kernel)
+        self.bias = self.add_weight(name='bias', 
+                                      shape=biasshape,
+                                      initializer='zeros',
+                                      trainable=True)
+        super(LocallyConnected, self).build(input_shape)  # Be sure to call this at the end
+
+    def call(self, inputs):
+        x = inputs
+        output = tf.expand_dims(self.bias, axis=-2)
+        xfactor = tf.expand_dims(x, axis=-2)
+        for i, kernel in enumerate(self.kernels):
+            step = i // 2
+            if i % 2 == 1:
+                step *= -1
+            output = output + tf.matmul(tf.roll(xfactor, step, axis=-3), kernel)
+        output = tf.squeeze(output, axis=-2)
+        return output + self.bias
+
+    def compute_output_shape(self, input_shape):
+        return (1,) + input_shape[1:len(input_shape) - 1] + [tf.shape(self.bias)[-1]]
+
 
 class AttentionPoolLayer(Layer):
 
